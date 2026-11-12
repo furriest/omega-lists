@@ -1,0 +1,81 @@
+name: Update ZeroOmega Lists
+
+on:
+  schedule:
+    # Запуск каждый день в 03:00 по UTC (06:00 по Москве)
+    - cron: '0 3 * * *'
+  workflow_dispatch: # Кнопка для ручного запуска в любое время
+
+permissions:
+  contents: write # Разрешение роботу сохранять файлы в ваш репозиторий
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Скачать текущий репозиторий
+        uses: actions/checkout@v4
+
+      - name: Собрать и конвертировать домены для ZeroOmega
+        run: |
+          python3 -c '
+          import urllib.request
+          import re
+
+          BASE_URL = "https://githubusercontent.com"
+          visited = set()
+          rules = set()
+
+          def parse_list(name):
+              if name in visited:
+                  return
+              visited.add(name)
+              url = BASE_URL + name
+              req = urllib.request.urlopen(url)
+              for raw_line in req.read().decode("utf-8").splitlines():
+                  # Убираем комментарии и пробелы
+                  line = raw_line.split("#")[0].strip()
+                  if not line:
+                      continue
+                  # Убираем атрибуты вида @cn, @ads и т.д.
+                  line = re.sub(r"\s+@\S+", "", line).strip()
+                  
+                  if line.startswith("include:"):
+                      inc_name = line.split(":", 1)[1].strip()
+                      parse_list(inc_name)
+                  elif line.startswith("full:"):
+                      domain = line.split(":", 1)[1].strip()
+                      rules.add(domain)
+                  elif line.startswith("domain:"):
+                      domain = line.split(":", 1)[1].strip()
+                      rules.add("*." + domain)
+                  elif line.startswith("regexp:") or line.startswith("keyword:"):
+                      # Пропускаем специфичные регулярки v2fly, несовместимые с ZeroOmega
+                      continue
+                  else:
+                      # В v2fly строка без префикса по умолчанию означает домен и все его поддомены
+                      rules.add("*." + line)
+
+          parse_list("anthropic")
+
+          header = [
+              "[SwitchyOmega Conditions]",
+              "; Require: SwitchyOmega 2.5.0",
+              "; Source: v2fly/domain-list-community (anthropic)",
+              ""
+          ]
+
+          with open("claude.txt", "w", encoding="utf-8") as f:
+              f.write("\n".join(header + sorted(rules)) + "\n")
+          '
+
+      - name: Сохранить обновленный файл в репозиторий
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add claude.txt
+          # Делаем коммит, только если список реально изменился
+          if ! git diff --staged --quiet; then
+            git commit -m "Auto-update claude.txt"
+            git push
+          fi
