@@ -2,12 +2,11 @@ name: Update ZeroOmega Lists
 
 on:
   schedule:
-    # Запуск каждый день в 03:00 по UTC (06:00 по Москве)
     - cron: '0 3 * * *'
-  workflow_dispatch: # Кнопка для ручного запуска в любое время
+  workflow_dispatch:
 
 permissions:
-  contents: write # Разрешение роботу сохранять файлы в ваш репозиторий
+  contents: write
 
 jobs:
   build:
@@ -16,13 +15,21 @@ jobs:
       - name: Скачать текущий репозиторий
         uses: actions/checkout@v4
 
+      - name: Скачать базу доменов v2fly
+        uses: actions/checkout@v4
+        with:
+          repository: v2fly/domain-list-community
+          path: v2fly-data
+          sparse-checkout: |
+            data
+
       - name: Собрать и конвертировать домены для ZeroOmega
         run: |
           python3 -c '
-          import urllib.request
+          import os
           import re
 
-          BASE_URL = "https://githubusercontent.com"
+          DATA_DIR = "v2fly-data/data"
           visited = set()
           rules = set()
 
@@ -30,31 +37,29 @@ jobs:
               if name in visited:
                   return
               visited.add(name)
-              url = BASE_URL + name
-              req = urllib.request.urlopen(url)
-              for raw_line in req.read().decode("utf-8").splitlines():
-                  # Убираем комментарии и пробелы
-                  line = raw_line.split("#")[0].strip()
-                  if not line:
-                      continue
-                  # Убираем атрибуты вида @cn, @ads и т.д.
-                  line = re.sub(r"\s+@\S+", "", line).strip()
-                  
-                  if line.startswith("include:"):
-                      inc_name = line.split(":", 1)[1].strip()
-                      parse_list(inc_name)
-                  elif line.startswith("full:"):
-                      domain = line.split(":", 1)[1].strip()
-                      rules.add(domain)
-                  elif line.startswith("domain:"):
-                      domain = line.split(":", 1)[1].strip()
-                      rules.add("*." + domain)
-                  elif line.startswith("regexp:") or line.startswith("keyword:"):
-                      # Пропускаем специфичные регулярки v2fly, несовместимые с ZeroOmega
-                      continue
-                  else:
-                      # В v2fly строка без префикса по умолчанию означает домен и все его поддомены
-                      rules.add("*." + line)
+              filepath = os.path.join(DATA_DIR, name)
+              if not os.path.exists(filepath):
+                  return
+              with open(filepath, "r", encoding="utf-8") as f:
+                  for raw_line in f:
+                      line = raw_line.split("#")[0].strip()
+                      if not line:
+                          continue
+                      line = re.sub(r"\s+@\S+", "", line).strip()
+                      
+                      if line.startswith("include:"):
+                          inc_name = line.split(":", 1)[1].strip()
+                          parse_list(inc_name)
+                      elif line.startswith("full:"):
+                          domain = line.split(":", 1)[1].strip()
+                          rules.add(domain)
+                      elif line.startswith("domain:"):
+                          domain = line.split(":", 1)[1].strip()
+                          rules.add("*." + domain)
+                      elif line.startswith("regexp:") or line.startswith("keyword:"):
+                          continue
+                      else:
+                          rules.add("*." + line)
 
           parse_list("anthropic")
 
@@ -69,12 +74,14 @@ jobs:
               f.write("\n".join(header + sorted(rules)) + "\n")
           '
 
+      - name: Удалить временную папку
+        run: rm -rf v2fly-data
+
       - name: Сохранить обновленный файл в репозиторий
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@://github.com"
           git add claude.txt
-          # Делаем коммит, только если список реально изменился
           if ! git diff --staged --quiet; then
             git commit -m "Auto-update claude.txt"
             git push
